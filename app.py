@@ -12,6 +12,9 @@ import os
 import tempfile
 from werkzeug.utils import secure_filename
 import traceback
+from pydub import AudioSegment
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -24,6 +27,14 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
+# Initialize rate limiter for API security
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://"
+)
+
 # Initialize services
 recognizer = sr.Recognizer()
 translator = Translator()
@@ -32,6 +43,54 @@ def allowed_file(filename):
     """Check if file extension is allowed"""
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def convert_to_wav(input_path):
+    """
+    Convert any audio format to WAV format for speech recognition
+    Returns the path to the converted WAV file
+    """
+    try:
+        # Get file extension
+        file_ext = os.path.splitext(input_path)[1].lower().replace('.', '')
+
+        # If already WAV, return as is
+        if file_ext == 'wav':
+            return input_path
+
+        # Load audio file using pydub
+        if file_ext == 'mp3':
+            audio = AudioSegment.from_mp3(input_path)
+        elif file_ext == 'm4a':
+            audio = AudioSegment.from_file(input_path, format='m4a')
+        elif file_ext == 'ogg':
+            audio = AudioSegment.from_ogg(input_path)
+        elif file_ext == 'flac':
+            audio = AudioSegment.from_file(input_path, format='flac')
+        elif file_ext == 'webm':
+            audio = AudioSegment.from_file(input_path, format='webm')
+        elif file_ext == 'opus':
+            audio = AudioSegment.from_file(input_path, format='opus')
+        else:
+            # Try generic approach
+            audio = AudioSegment.from_file(input_path)
+
+        # Convert to WAV format
+        # Set parameters for speech recognition compatibility
+        audio = audio.set_frame_rate(16000)  # 16kHz sample rate
+        audio = audio.set_channels(1)  # Mono
+        audio = audio.set_sample_width(2)  # 16-bit
+
+        # Create output path
+        output_path = os.path.splitext(input_path)[0] + '_converted.wav'
+
+        # Export as WAV
+        audio.export(output_path, format='wav')
+
+        return output_path
+
+    except Exception as e:
+        print(f"Audio conversion error: {str(e)}")
+        raise ValueError(f"Could not convert audio file: {str(e)}")
 
 @app.route('/')
 def index():
@@ -58,6 +117,7 @@ def health():
     })
 
 @app.route('/api/translate', methods=['POST'])
+@limiter.limit("10 per minute")  # Rate limit: 10 translations per minute
 def translate_voice():
     """
     Translate voice note to English
@@ -92,10 +152,17 @@ def translate_voice():
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
-        
+
+        converted_filepath = None
+
         try:
+            # Convert audio to WAV format if needed
+            wav_filepath = convert_to_wav(filepath)
+            if wav_filepath != filepath:
+                converted_filepath = wav_filepath
+
             # Transcribe audio
-            with sr.AudioFile(filepath) as source:
+            with sr.AudioFile(wav_filepath) as source:
                 audio_data = recognizer.record(source)
             
             # Recognize speech
@@ -144,9 +211,11 @@ def translate_voice():
                 })
         
         finally:
-            # Clean up temporary file
+            # Clean up temporary files
             if os.path.exists(filepath):
                 os.remove(filepath)
+            if converted_filepath and os.path.exists(converted_filepath):
+                os.remove(converted_filepath)
     
     except Exception as e:
         print(f"Error: {str(e)}")
