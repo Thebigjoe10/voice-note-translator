@@ -1,29 +1,44 @@
 #!/usr/bin/env python3
 """
 Voice Note Translator - Nigerian Pidgin & Native Languages
-Translates voice notes to English with high accuracy
+Translates voice notes to English with high accuracy using OpenAI Whisper
 """
 
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
-import speech_recognition as sr
+from openai import OpenAI
 from googletrans import Translator
 import os
 from pathlib import Path
 import threading
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 class VoiceTranslatorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Voice Note Translator - Nigerian Languages")
+        self.root.title("Voice Note Translator - Nigerian Languages (Powered by Whisper)")
         self.root.geometry("900x700")
         self.root.configure(bg='#1a1a2e')
-        
+
         # Initialize components
-        self.recognizer = sr.Recognizer()
+        self.openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.translator = Translator()
         self.audio_file_path = None
-        
+
+        # Check if API key is configured
+        if not os.getenv('OPENAI_API_KEY'):
+            messagebox.showwarning(
+                "API Key Missing",
+                "OpenAI API key not found!\n\n"
+                "Please create a .env file with:\n"
+                "OPENAI_API_KEY=your_api_key_here\n\n"
+                "Get your API key from:\n"
+                "https://platform.openai.com/api-keys"
+            )
+
         # Create UI
         self.create_ui()
         
@@ -40,7 +55,7 @@ class VoiceTranslatorApp:
             fg='#00d4ff'
         )
         title_label.pack()
-        
+
         subtitle_label = tk.Label(
             title_frame,
             text="Nigerian Pidgin & Native Languages to English",
@@ -49,6 +64,15 @@ class VoiceTranslatorApp:
             fg='#ffffff'
         )
         subtitle_label.pack()
+
+        tech_label = tk.Label(
+            title_frame,
+            text="⚡ Powered by OpenAI Whisper - Superior Accuracy",
+            font=('Arial', 10, 'italic'),
+            bg='#1a1a2e',
+            fg='#4CAF50'
+        )
+        tech_label.pack(pady=5)
         
         # File selection frame
         file_frame = tk.Frame(self.root, bg='#16213e')
@@ -257,99 +281,101 @@ class VoiceTranslatorApp:
         thread.start()
         
     def translate_audio(self):
-        """Transcribe and translate audio"""
+        """Transcribe and translate audio using OpenAI Whisper"""
         try:
             # Update UI
             self.root.after(0, self.update_status, "Processing audio file...")
             self.root.after(0, self.progress.start)
             self.root.after(0, lambda: self.translate_btn.config(state='disabled'))
-            
+
             # Clear previous results
             self.root.after(0, lambda: self.original_text.delete('1.0', tk.END))
             self.root.after(0, lambda: self.translated_text.delete('1.0', tk.END))
-            
-            # Transcribe audio
-            self.root.after(0, self.update_status, "Transcribing voice note...")
 
-            with sr.AudioFile(self.audio_file_path) as source:
-                # Adjust for ambient noise to improve recognition
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                audio_data = self.recognizer.record(source)
+            # Transcribe audio using Whisper
+            self.root.after(0, self.update_status, "Transcribing with Whisper AI...")
 
-            # Map Nigerian languages to Google Speech Recognition language codes
+            # Map Nigerian languages to Whisper language codes
             language_map = {
-                "Nigerian Pidgin": "en-NG",   # Nigerian English (Pidgin is English-based)
-                "Yoruba": "yo-NG",             # Yoruba (Nigeria)
-                "Igbo": "ig-NG",               # Igbo (Nigeria)
-                "Hausa": "ha-NG",              # Hausa (Nigeria)
-                "Urhobo": "en-NG",             # Urhobo (use Nigerian English as fallback)
-                "Auto-detect": None            # Auto-detect
+                "Nigerian Pidgin": None,      # Auto-detect (Whisper handles Pidgin better)
+                "Yoruba": "yo",               # Yoruba
+                "Igbo": "ig",                 # Igbo
+                "Hausa": "ha",                # Hausa
+                "Urhobo": None,               # Auto-detect (not officially supported)
+                "Auto-detect": None           # Auto-detect
             }
 
             # Get selected language
             selected_lang = self.lang_var.get()
+            whisper_language = language_map.get(selected_lang, None)
 
-            # Try to recognize speech
+            # Transcribe using OpenAI Whisper API
             try:
-                original_text = None
+                with open(self.audio_file_path, 'rb') as audio_file:
+                    # Prepare transcription parameters
+                    transcription_params = {
+                        'file': audio_file,
+                        'model': 'whisper-1',
+                        'response_format': 'verbose_json',
+                    }
 
-                if selected_lang == "Auto-detect":
-                    # Try multiple Nigerian languages
-                    languages_to_try = [
-                        ("en-NG", "Nigerian English/Pidgin"),
-                        ("yo-NG", "Yoruba"),
-                        ("ig-NG", "Igbo"),
-                        ("ha-NG", "Hausa"),
-                        ("en-US", "English")
-                    ]
+                    # Add language parameter if specified
+                    if whisper_language:
+                        transcription_params['language'] = whisper_language
 
-                    for lang_code, lang_name in languages_to_try:
-                        try:
-                            self.root.after(0, self.update_status, f"Trying {lang_name}...")
-                            original_text = self.recognizer.recognize_google(
-                                audio_data,
-                                language=lang_code
-                            )
-                            self.root.after(0, self.update_status, f"Recognized as {lang_name}")
-                            break
-                        except sr.UnknownValueError:
-                            continue
+                    # Call Whisper API
+                    response = self.openai_client.audio.transcriptions.create(**transcription_params)
 
-                    if not original_text:
-                        raise sr.UnknownValueError()
-                else:
-                    # Use specific language
-                    lang_code = language_map.get(selected_lang, "en-NG")
-                    original_text = self.recognizer.recognize_google(
-                        audio_data,
-                        language=lang_code
+                    original_text = response.text
+                    detected_language = getattr(response, 'language', 'unknown')
+
+                    # Map language codes to full names
+                    language_names = {
+                        'en': 'English',
+                        'yo': 'Yoruba',
+                        'ig': 'Igbo',
+                        'ha': 'Hausa',
+                        'pcm': 'Nigerian Pidgin'
+                    }
+
+                    detected_lang_name = language_names.get(detected_language, detected_language)
+
+                    self.root.after(
+                        0,
+                        self.update_status,
+                        f"Detected language: {detected_lang_name}"
                     )
+
+                if not original_text or original_text.strip() == '':
+                    raise ValueError("No speech detected in audio")
 
                 self.root.after(0, lambda: self.original_text.insert('1.0', original_text))
 
-            except sr.UnknownValueError:
-                self.root.after(0, lambda: self.original_text.insert(
-                    '1.0',
-                    "Could not understand audio. Please ensure:\n"
-                    "- Audio is clear with minimal background noise\n"
-                    "- Speaking in one of the supported languages\n"
-                    "- File format is supported (WAV works best)\n"
-                    "- Try 'Auto-detect' mode for best results"
-                ))
+            except Exception as e:
+                error_msg = str(e)
+                if 'api_key' in error_msg.lower() or 'authentication' in error_msg.lower():
+                    self.root.after(0, lambda: self.original_text.insert(
+                        '1.0',
+                        "API Key Error!\n\n"
+                        "Please ensure you have:\n"
+                        "1. Created a .env file in the project directory\n"
+                        "2. Added: OPENAI_API_KEY=your_api_key_here\n"
+                        "3. Get your API key from: https://platform.openai.com/api-keys\n\n"
+                        f"Error details: {error_msg}"
+                    ))
+                else:
+                    self.root.after(0, lambda: self.original_text.insert(
+                        '1.0',
+                        f"Transcription failed.\n\n"
+                        f"Please ensure:\n"
+                        f"- Audio file contains clear speech\n"
+                        f"- You have internet connection\n"
+                        f"- Your OpenAI API key is valid\n\n"
+                        f"Error: {error_msg}"
+                    ))
                 self.root.after(0, self.progress.stop)
                 self.root.after(0, lambda: self.translate_btn.config(state='normal'))
                 self.root.after(0, self.update_status, "Transcription failed")
-                return
-
-            except sr.RequestError as e:
-                self.root.after(0, lambda: self.original_text.insert(
-                    '1.0',
-                    f"Could not connect to speech recognition service.\n"
-                    f"Please check your internet connection."
-                ))
-                self.root.after(0, self.progress.stop)
-                self.root.after(0, lambda: self.translate_btn.config(state='normal'))
-                self.root.after(0, self.update_status, "Connection error")
                 return
             
             # Translate to English
