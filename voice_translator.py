@@ -108,13 +108,14 @@ class VoiceTranslatorApp:
             fg='#ffffff'
         ).pack(side='left', padx=10)
         
-        self.lang_var = tk.StringVar(value="Nigerian Pidgin")
+        self.lang_var = tk.StringVar(value="Auto-detect")
         languages = [
+            "Auto-detect",
             "Nigerian Pidgin",
             "Yoruba",
             "Igbo",
             "Hausa",
-            "Auto-detect"
+            "Urhobo"
         ]
         
         self.lang_dropdown = ttk.Combobox(
@@ -269,29 +270,77 @@ class VoiceTranslatorApp:
             
             # Transcribe audio
             self.root.after(0, self.update_status, "Transcribing voice note...")
-            
+
             with sr.AudioFile(self.audio_file_path) as source:
+                # Adjust for ambient noise to improve recognition
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
                 audio_data = self.recognizer.record(source)
-                
+
+            # Map Nigerian languages to Google Speech Recognition language codes
+            language_map = {
+                "Nigerian Pidgin": "en-NG",   # Nigerian English (Pidgin is English-based)
+                "Yoruba": "yo-NG",             # Yoruba (Nigeria)
+                "Igbo": "ig-NG",               # Igbo (Nigeria)
+                "Hausa": "ha-NG",              # Hausa (Nigeria)
+                "Urhobo": "en-NG",             # Urhobo (use Nigerian English as fallback)
+                "Auto-detect": None            # Auto-detect
+            }
+
+            # Get selected language
+            selected_lang = self.lang_var.get()
+
             # Try to recognize speech
             try:
-                # Use Google Speech Recognition
-                original_text = self.recognizer.recognize_google(audio_data)
+                original_text = None
+
+                if selected_lang == "Auto-detect":
+                    # Try multiple Nigerian languages
+                    languages_to_try = [
+                        ("en-NG", "Nigerian English/Pidgin"),
+                        ("yo-NG", "Yoruba"),
+                        ("ig-NG", "Igbo"),
+                        ("ha-NG", "Hausa"),
+                        ("en-US", "English")
+                    ]
+
+                    for lang_code, lang_name in languages_to_try:
+                        try:
+                            self.root.after(0, self.update_status, f"Trying {lang_name}...")
+                            original_text = self.recognizer.recognize_google(
+                                audio_data,
+                                language=lang_code
+                            )
+                            self.root.after(0, self.update_status, f"Recognized as {lang_name}")
+                            break
+                        except sr.UnknownValueError:
+                            continue
+
+                    if not original_text:
+                        raise sr.UnknownValueError()
+                else:
+                    # Use specific language
+                    lang_code = language_map.get(selected_lang, "en-NG")
+                    original_text = self.recognizer.recognize_google(
+                        audio_data,
+                        language=lang_code
+                    )
+
                 self.root.after(0, lambda: self.original_text.insert('1.0', original_text))
-                
+
             except sr.UnknownValueError:
                 self.root.after(0, lambda: self.original_text.insert(
-                    '1.0', 
+                    '1.0',
                     "Could not understand audio. Please ensure:\n"
-                    "- Audio is clear\n"
-                    "- Minimal background noise\n"
-                    "- File format is supported (WAV works best)"
+                    "- Audio is clear with minimal background noise\n"
+                    "- Speaking in one of the supported languages\n"
+                    "- File format is supported (WAV works best)\n"
+                    "- Try 'Auto-detect' mode for best results"
                 ))
                 self.root.after(0, self.progress.stop)
                 self.root.after(0, lambda: self.translate_btn.config(state='normal'))
                 self.root.after(0, self.update_status, "Transcription failed")
                 return
-                
+
             except sr.RequestError as e:
                 self.root.after(0, lambda: self.original_text.insert(
                     '1.0',
