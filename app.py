@@ -16,6 +16,9 @@ from pydub import AudioSegment
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
+# Set ffmpeg path explicitly
+AudioSegment.converter = r"C:\Users\jojos\ffmpeg-8.0.1-essentials_build\ffmpeg-8.0.1-essentials_build\bin\ffmpeg.exe"
+
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
